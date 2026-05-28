@@ -7,7 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── PROPIEDADES AIRHOST.CL ──────────────────────────────────────────────────
 const PROPERTIES = [
   { id: 'p01', name: 'Roberto del Río',      ota: 'airbnb',  icalUrl: 'https://www.airbnb.cl/calendar/ical/1660927266209635218.ics?t=81f8d1e504e745dabeb5ad7da52d2953' },
   { id: 'p02', name: 'Wood 115',             ota: 'airbnb',  icalUrl: 'https://www.airbnb.cl/calendar/ical/1603676872799033000.ics?t=ca3ff6da5cbc46e39be3816eca258774' },
@@ -42,17 +41,15 @@ const PROPERTIES = [
   { id: 'p31', name: 'Sta. Elvira 97',       ota: 'airbnb',  icalUrl: 'https://www.airbnb.cl/calendar/ical/1626991587206641280.ics?t=b2a0d4e50fae4c81a3f4f63a03255b46' },
   { id: 'p32', name: 'Toesca 905',           ota: 'airbnb',  icalUrl: 'https://www.airbnb.cl/calendar/ical/1621081348833059647.ics?t=7e53e43ed8334b9f9302d8c6522b98ed' },
   { id: 'p33', name: 'Toesca 905 BK',        ota: 'booking', icalUrl: 'https://ical.booking.com/v1/export?t=62f63d9d-d684-4f9f-93b9-50e015343c7e' },
-  { id: 'p34', name: 'Tocornal 804 BK',      ota: 'booking', icalUrl: 'https://ical.booking.com/v1/export?t=7c8e6d46-24fc-4c46-a0e3-b0dbe092726f' },
+  { id: 'p34', name: 'Coquimbo 14 BK',       ota: 'booking', icalUrl: 'https://ical.booking.com/v1/export?t=7c8e6d46-24fc-4c46-a0e3-b0dbe092726f' },
   { id: 'p35', name: 'Wood 603 BK',          ota: 'booking', icalUrl: 'https://ical.booking.com/v1/export?t=605c8659-7b50-466b-aec5-b6b79dee6c60' },
   { id: 'p36', name: 'Wood 617 BK',          ota: 'booking', icalUrl: 'https://ical.booking.com/v1/export?t=4cf67ebc-4f87-4300-8dcc-a11a538d183a' },
 ];
-// ────────────────────────────────────────────────────────────────────────────
 
 function fetchUrl(url) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
     const req = client.get(url, (res) => {
-      // Follow redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         fetchUrl(res.headers.location).then(resolve).catch(reject);
         return;
@@ -66,68 +63,76 @@ function fetchUrl(url) {
   });
 }
 
+function parseDate(d) {
+  // Remove TZID prefix if present e.g. "TZID=America/Santiago:20260527"
+  d = d.replace(/.*:/, '').trim();
+  if (d.length === 8) {
+    return new Date(Date.UTC(
+      parseInt(d.slice(0,4)),
+      parseInt(d.slice(4,6)) - 1,
+      parseInt(d.slice(6,8))
+    ));
+  }
+  const clean = d.replace(/T(\d{2})(\d{2})(\d{2})Z?$/, 'T$1:$2:$3Z');
+  return new Date(clean);
+}
+
 function parseIcal(icsText, prop) {
   const events = [];
   const blocks = icsText.split('BEGIN:VEVENT');
 
   blocks.slice(1).forEach(block => {
-    // Get field value, handling folded lines (lines starting with space)
     const get = (key) => {
-      const match = block.match(new RegExp(key + '[^:]*:([^\\r\\n]+(?:\\r?\\n[ \\t][^\\r\\n]+)*)'));
+      const match = block.match(new RegExp(key + '[^:\r\n]*:([^\r\n]+(?:\r?\n[ \t][^\r\n]+)*)'));
       return match ? match[1].replace(/\r?\n[ \t]/g, '').trim() : '';
     };
 
-    const dtstart  = get('DTSTART');
-    const dtend    = get('DTEND');
-    const summary  = get('SUMMARY') || '';
-    const uid      = get('UID');
-    const status   = get('STATUS');
+    const dtstart = get('DTSTART');
+    const dtend   = get('DTEND');
+    const summary = get('SUMMARY') || '';
+    const uid     = get('UID');
+    const status  = get('STATUS');
 
     if (!dtstart || !dtend) return;
-
-    // Skip cancelled events
     if (status === 'CANCELLED') return;
-
-    const sum = summary.toLowerCase();
-
-    // Skip Airbnb block/unavailable entries (not real reservations)
-    if (prop.ota === 'airbnb') {
-      if (sum.includes('not available') || sum === 'airbnb (not available)') return;
-      if (sum === 'blocked') return;
-      // Only keep entries that look like real reservations
-      if (sum.includes('airbnb') && !sum.includes('reserved') && !sum.includes('reservation') && !sum.includes('hmac')) return;
-    }
-
-    // Skip Booking.com block entries
-    if (prop.ota === 'booking') {
-      if (sum === 'closed' || sum === 'not available' || sum.includes('unavailable')) return;
-    }
-
-    const parseDate = (d) => {
-      // Remove timezone info if present (e.g. TZID=...)
-      d = d.replace(/.*:/, '').trim();
-      if (d.length === 8) {
-        return new Date(parseInt(d.slice(0,4)), parseInt(d.slice(4,6))-1, parseInt(d.slice(6,8)));
-      }
-      // Handle datetime format
-      const clean = d.replace(/T(\d{6})Z?$/, (_, t) => `T${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}`);
-      return new Date(clean);
-    };
 
     const checkin  = parseDate(dtstart);
     const checkout = parseDate(dtend);
-
     if (isNaN(checkin.getTime()) || isNaN(checkout.getTime())) return;
 
     const nights = Math.round((checkout - checkin) / (1000 * 60 * 60 * 24));
     if (nights < 1) return;
 
-    // Extract guest name
-    let guest = summary;
-    // Clean up common prefixes
-    guest = guest.replace(/^(reservation|reserva|booking)\s*[-–:]/i, '').trim();
-    if (!guest || guest.length < 2 || sum.includes('airbnb') || sum.includes('booking.com')) {
-      guest = prop.ota === 'airbnb' ? 'Huésped Airbnb' : 'Huésped Booking';
+    const sum = summary.toLowerCase();
+
+    // ── AIRBNB: skip block/unavailable entries ──────────────────────────────
+    if (prop.ota === 'airbnb') {
+      const isBlock =
+        sum === 'not available' ||
+        sum === 'airbnb (not available)' ||
+        sum === 'blocked' ||
+        sum === 'unavailable' ||
+        (sum.includes('not available') && !sum.includes('@'));
+      if (isBlock) return;
+    }
+
+    // ── BOOKING: "CLOSED - Not available" = real reservation (their format) ─
+    // Booking uses this text for ALL reservations in iCal export.
+    // Single-day blocks (nights < 1) are already filtered above.
+    // Accept everything with nights >= 1.
+
+    // Determine guest name
+    let guest;
+    if (prop.ota === 'booking') {
+      // Booking doesn't export guest names in iCal — always use generic label
+      guest = 'Huésped Booking';
+    } else {
+      guest = summary
+        .replace(/^(reservation|reserva)\s*[-–:]/i, '')
+        .trim();
+      if (!guest || guest.length < 2 || sum.includes('airbnb') || sum.includes('hmac')) {
+        guest = 'Huésped Airbnb';
+      }
     }
 
     events.push({
@@ -145,13 +150,11 @@ function parseIcal(icsText, prop) {
   return events;
 }
 
-// Cache para no hacer fetch en cada request
 let cache = { data: null, ts: 0 };
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+const CACHE_TTL = 5 * 60 * 1000;
 
 async function getAllReservations() {
   if (cache.data && Date.now() - cache.ts < CACHE_TTL) return cache.data;
-
   const all = [];
   for (const prop of PROPERTIES) {
     try {
@@ -163,7 +166,6 @@ async function getAllReservations() {
       console.error(`Error fetching ${prop.name}:`, e.message);
     }
   }
-
   cache = { data: all, ts: Date.now() };
   return all;
 }
@@ -171,26 +173,19 @@ async function getAllReservations() {
 app.get('/reservations', async (req, res) => {
   try {
     const reservations = await getAllReservations();
-    res.json({
-      ok: true,
-      reservations,
-      properties: PROPERTIES.map(p => ({ id: p.id, name: p.name, ota: p.ota }))
-    });
+    res.json({ ok: true, reservations, properties: PROPERTIES.map(p => ({ id: p.id, name: p.name, ota: p.ota })) });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// Debug endpoint — ver raw iCal de una propiedad
 app.get('/debug/:propId', async (req, res) => {
   const prop = PROPERTIES.find(p => p.id === req.params.propId);
   if (!prop) return res.status(404).json({ error: 'Not found' });
   try {
     const ics = await fetchUrl(prop.icalUrl);
-    res.type('text/plain').send(ics.slice(0, 3000)); // primeros 3000 chars
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.type('text/plain').send(ics.slice(0, 5000));
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, props: PROPERTIES.length }));
