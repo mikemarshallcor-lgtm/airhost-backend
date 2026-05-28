@@ -192,3 +192,29 @@ app.get('/health', (req, res) => res.json({ ok: true, props: PROPERTIES.length }
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`AIRHOST backend running on port ${PORT}`));
+
+// ── STATUS endpoint: verifica cada propiedad ──────────────────────────────────
+app.get('/status', async (req, res) => {
+  const results = [];
+  for (const prop of PROPERTIES) {
+    const start = Date.now();
+    try {
+      const ics = await fetchUrl(prop.icalUrl);
+      const events = parseIcal(ics, prop);
+      const hasVcalendar = ics.includes('BEGIN:VCALENDAR');
+      results.push({
+        id: prop.id, name: prop.name, ota: prop.ota,
+        ok: true, events: events.length,
+        ms: Date.now() - start,
+        hasData: hasVcalendar,
+      });
+    } catch (e) {
+      results.push({
+        id: prop.id, name: prop.name, ota: prop.ota,
+        ok: false, events: 0, error: e.message,
+        ms: Date.now() - start,
+      });
+    }
+  }
+  res.json({ ok: true, checked: results.length, results });
+});
